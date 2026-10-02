@@ -175,8 +175,7 @@ Retorne SOMENTE JSON válido:
                     },
                     videoMetadata: {
                       startOffset: `${clipStart}s`,
-                      endOffset: `${clipEnd}s`,
-                      fps: 2
+                      endOffset: `${clipEnd}s`
                     }
                   },
                   { text: prompt }
@@ -227,7 +226,7 @@ Retorne SOMENTE JSON válido:
 
           // Selected ShadowCut clips are intentionally speech-heavy. Very sparse
           // cue coverage usually means the model skipped spoken material.
-          if (coverageRatio < 0.42 || largestGap > 8) {
+          if (coverageRatio < 0.5 || largestGap > 5.5) {
             lastDiagnostic = `${model}: legenda muito esparsa (cobertura ${Math.round(
               coverageRatio * 100
             )}%, maior intervalo ${largestGap.toFixed(1)}s)`;
