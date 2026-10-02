@@ -21,3 +21,12 @@ export type AnalysisResult = {
   sourceUrl: string;
   clips: Clip[];
 };
+
+export type SavedSession = {
+  videoId: string;
+  analysis: AnalysisResult;
+  studiedClipIds: string[];
+  lastClipIndex: number;
+  createdAt: string;
+  updatedAt: string;
+};
