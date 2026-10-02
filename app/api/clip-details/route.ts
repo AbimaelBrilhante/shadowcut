@@ -304,7 +304,7 @@ export async function POST(req: NextRequest) {
 
     // A long single request was skipping spoken passages. Small overlapping
     // windows trade a few extra first-time calls for much better completeness.
-    const WINDOW_SECONDS = 20;
+    const WINDOW_SECONDS = 30;
     const OVERLAP_SECONDS = 2;
     const windows: Array<{ startSec: number; endSec: number }> = [];
 
@@ -316,27 +316,18 @@ export async function POST(req: NextRequest) {
       cursor = Math.max(cursor + 1, end - OVERLAP_SECONDS);
     }
 
-    const allSentences: Sentence[] = [];
-    const allChunks: Chunk[] = [];
-
-    for (const window of windows) {
-      let completed = false;
+    async function processWindow(window: { startSec: number; endSec: number }) {
       let lastError = "";
 
       for (const model of models) {
         try {
-          const result = await requestWindow({
+          return await requestWindow({
             apiKey,
             model,
             youtubeUrl: canonicalYouTubeUrl,
             startSec: window.startSec,
             endSec: window.endSec
           });
-
-          allSentences.push(...result.sentences);
-          allChunks.push(...result.chunks);
-          completed = true;
-          break;
         } catch (error) {
           lastError = error instanceof Error ? error.message : "Erro desconhecido";
           console.error("Subtitle window failed", {
@@ -344,30 +335,29 @@ export async function POST(req: NextRequest) {
             model,
             error: lastError
           });
-
-          const typed = error as Error & { status?: number; apiCode?: string };
-          const retryable =
-            [429, 500, 502, 503, 504].includes(typed.status ?? 0) ||
-            ["UNAVAILABLE", "RESOURCE_EXHAUSTED", "INTERNAL"].includes(
-              typed.apiCode ?? ""
-            );
-
-          // Also try another model for malformed/empty transcription output.
-          if (!retryable && typed.status && typed.status < 500) {
-            continue;
-          }
         }
       }
 
-      if (!completed) {
-        return NextResponse.json(
-          {
-            error: `Não consegui transcrever a janela ${window.startSec.toFixed(
-              1
-            )}s–${window.endSec.toFixed(1)}s. ${lastError}`
-          },
-          { status: 502 }
-        );
+      throw new Error(
+        `Não consegui transcrever a janela ${window.startSec.toFixed(
+          1
+        )}s–${window.endSec.toFixed(1)}s. ${lastError}`
+      );
+    }
+
+    // Process small groups in parallel. This keeps the first preparation fast
+    // without firing every free-tier request at once.
+    const allSentences: Sentence[] = [];
+    const allChunks: Chunk[] = [];
+    const CONCURRENCY = 2;
+
+    for (let i = 0; i < windows.length; i += CONCURRENCY) {
+      const batch = windows.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(batch.map(processWindow));
+
+      for (const result of results) {
+        allSentences.push(...result.sentences);
+        allChunks.push(...result.chunks);
       }
     }
 
