@@ -102,15 +102,10 @@ PARA CADA CORTE:
 - dê um título curto em português;
 - informe timestamps absolutos em segundos;
 - estime dificuldade: B1, B1-B2 ou B2;
-- explique em uma frase por que o trecho é bom para shadowing;
-- transcreva o corte em frases curtas;
-- para cada frase, informe início/fim em segundos absolutos;
-- forneça a frase original em inglês;
-- forneça tradução natural em português brasileiro.
+- explique em uma frase por que o trecho é bom para shadowing.
 
 IMPORTANTE:
-- não invente falas;
-- se não tiver confiança em uma frase, omita;
+- nesta etapa NÃO transcreva as falas; uma segunda etapa fará a transcrição detalhada apenas do corte estudado;
 - respeite a ordem cronológica;
 - retorne SOMENTE JSON válido, sem markdown.
 
@@ -124,15 +119,7 @@ FORMATO:
       "startSec": 123.0,
       "endSec": 205.0,
       "why": "motivo curto",
-      "difficulty": "B1-B2",
-      "sentences": [
-        {
-          "startSec": 123.0,
-          "endSec": 127.5,
-          "en": "English sentence.",
-          "pt": "Tradução em português."
-        }
-      ]
+      "difficulty": "B1-B2"
     }
   ]
 }
