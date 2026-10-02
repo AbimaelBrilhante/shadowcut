@@ -56,6 +56,7 @@ export async function saveNewSession(analysis: AnalysisResult): Promise<SavedSes
     analysis,
     studiedClipIds: previous?.studiedClipIds ?? [],
     lastClipIndex: previous?.lastClipIndex ?? 0,
+    sentenceAdjustments: previous?.sentenceAdjustments ?? {},
     createdAt: previous?.createdAt ?? now,
     updatedAt: now
   };
