@@ -211,16 +211,25 @@ export default function Home() {
     setError("");
 
     try {
-      const res = await fetch("/api/clip-details", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: baseAnalysis.sourceUrl,
-          startSec: target.startSec,
-          endSec: target.endSec,
-          title: target.title
-        })
-      });
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 90000);
+
+      let res: Response;
+      try {
+        res = await fetch("/api/clip-details", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            url: baseAnalysis.sourceUrl,
+            startSec: target.startSec,
+            endSec: target.endSec,
+            title: target.title
+          })
+        });
+      } finally {
+        window.clearTimeout(timeout);
+      }
 
       const data = await res.json();
       if (!res.ok) {
@@ -254,11 +263,14 @@ export default function Home() {
       await refreshHistory();
       return nextAnalysis;
     } catch (e) {
-      setError(
-        e instanceof Error
-          ? e.message
-          : "Não consegui preparar a legenda deste corte."
-      );
+      const message =
+        e instanceof DOMException && e.name === "AbortError"
+          ? "A preparação da legenda demorou mais de 90 segundos. Tente novamente."
+          : e instanceof Error
+            ? e.message
+            : "Não consegui preparar a legenda deste corte.";
+
+      setError(message);
       return baseAnalysis;
     } finally {
       setDetailsLoadingId(null);
