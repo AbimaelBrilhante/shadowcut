@@ -71,7 +71,10 @@ export async function POST(req: NextRequest) {
 
     const rawApiKey = process.env.GEMINI_API_KEY ?? "";
     const apiKey = rawApiKey.trim().replace(/^["\']|["\']$/g, "");
-    const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+    const preferredModel = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+    const models = Array.from(
+      new Set([preferredModel, "gemini-3.5-flash-lite", "gemini-3.5-flash"])
+    );
 
     if (!apiKey) {
       return NextResponse.json(
@@ -135,48 +138,71 @@ FORMATO:
 }
 `.trim();
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [
-                {
-                  fileData: {
-                    fileUri: canonicalYouTubeUrl
+    let lastDiagnostic = "";
+    let lastStatus = 502;
+
+    for (const model of models) {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  {
+                    fileData: {
+                      fileUri: canonicalYouTubeUrl
+                    }
+                  },
+                  {
+                    text: prompt
                   }
-                },
-                {
-                  text: prompt
-                }
-              ]
+                ]
+              }
+            ],
+            generationConfig: {
+              responseMimeType: "application/json",
+              temperature: 0.2
             }
-          ],
-          generationConfig: {
-            responseMimeType: "application/json",
-            temperature: 0.2
-          }
-        })
-      }
-    );
+          })
+        }
+      );
 
-    if (!response.ok) {
+      if (response.ok) {
+        const payload = await response.json() as Record<string, any>;
+        const outputText = String(
+          payload?.candidates?.[0]?.content?.parts
+            ?.map((part: Record<string, unknown>) => String(part?.text ?? ""))
+            .join("") ?? ""
+        ).trim();
+
+        if (!outputText) {
+          const finishReason = String(payload?.candidates?.[0]?.finishReason ?? "");
+          lastDiagnostic = finishReason
+            ? `${model}: resposta sem texto (motivo: ${finishReason})`
+            : `${model}: resposta sem texto utilizável`;
+          continue;
+        }
+
+        try {
+          return NextResponse.json(
+            normalize(JSON.parse(cleanJson(outputText)), videoId, canonicalYouTubeUrl)
+          );
+        } catch (parseError) {
+          lastDiagnostic = `${model}: respondeu, mas o JSON veio inválido`;
+          console.error("Gemini invalid JSON", model, outputText.slice(0, 1200), parseError);
+          continue;
+        }
+      }
+
       const detail = await response.text();
-      console.error("Gemini generateContent", response.status, detail);
-
-      if (response.status === 429) {
-        return NextResponse.json(
-          { error: "A cota gratuita do Gemini foi atingida. Tente novamente depois." },
-          { status: 429 }
-        );
-      }
+      console.error("Gemini generateContent", model, response.status, detail);
 
       let apiMessage = "";
       let apiCode = "";
@@ -187,34 +213,32 @@ FORMATO:
       } catch {}
 
       const diagnostic = [apiCode, apiMessage].filter(Boolean).join(" — ");
-      return NextResponse.json(
-        {
-          error: diagnostic
-            ? `Gemini: ${diagnostic}`
-            : `Gemini retornou erro ${response.status}: ${detail.slice(0, 300)}`
-        },
-        { status: 502 }
-      );
+      lastDiagnostic = diagnostic
+        ? `${model}: ${diagnostic}`
+        : `${model}: erro ${response.status}`;
+      lastStatus = response.status;
+
+      const retryable =
+        [429, 500, 502, 503, 504].includes(response.status) ||
+        ["UNAVAILABLE", "RESOURCE_EXHAUSTED", "INTERNAL"].includes(apiCode);
+
+      if (!retryable) break;
     }
 
-    const payload = await response.json() as Record<string, any>;
-    const outputText = String(
-      payload?.candidates?.[0]?.content?.parts
-        ?.map((part: Record<string, unknown>) => String(part?.text ?? ""))
-        .join("") ?? ""
-    ).trim();
-
-    if (!outputText) {
-      const finishReason = String(payload?.candidates?.[0]?.finishReason ?? "");
-      throw new Error(
-        finishReason
-          ? `A IA não retornou texto utilizável (motivo: ${finishReason}).`
-          : "A IA respondeu sem conteúdo utilizável."
+    if (lastStatus === 429) {
+      return NextResponse.json(
+        { error: "A cota gratuita dos modelos disponíveis foi atingida. Tente novamente depois." },
+        { status: 429 }
       );
     }
 
     return NextResponse.json(
-      normalize(JSON.parse(cleanJson(outputText)), videoId, canonicalYouTubeUrl)
+      {
+        error: lastDiagnostic
+          ? `Gemini: ${lastDiagnostic}`
+          : "Não consegui analisar o vídeo com os modelos gratuitos disponíveis."
+      },
+      { status: 502 }
     );
   } catch (error) {
     console.error(error);
