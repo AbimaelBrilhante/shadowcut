@@ -41,3 +41,5 @@ Abra http://localhost:3000.
 ## Produção
 
 Aplicação publicada em: https://shadowcut.vercel.app
+
+<!-- redeploy-after-gemini-key-refresh -->
