@@ -37,3 +37,7 @@ npm run dev
 Abra http://localhost:3000.
 
 > Uso pessoal / MVP. A análise direta de URLs do YouTube no Gemini está em preview e os limites podem mudar.
+
+## Produção
+
+Aplicação publicada em: https://shadowcut.vercel.app
