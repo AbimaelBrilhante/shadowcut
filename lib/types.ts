@@ -21,6 +21,7 @@ export type Clip = {
   sentences: Sentence[];
   chunks?: Chunk[];
   detailsReady?: boolean;
+  detailsVersion?: number;
 };
 
 export type AnalysisResult = {
