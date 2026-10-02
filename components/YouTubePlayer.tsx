@@ -94,7 +94,7 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
         endRef.current = null;
         onRangeEndRef.current?.();
       }
-    }, 100);
+    }, 250);
 
     return () => window.clearInterval(timer);
   }, []);
