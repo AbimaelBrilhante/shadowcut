@@ -69,7 +69,8 @@ export async function POST(req: NextRequest) {
 
     const canonicalYouTubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const rawApiKey = process.env.GEMINI_API_KEY ?? "";
+    const apiKey = rawApiKey.trim().replace(/^["\']|["\']$/g, "");
     const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 
     if (!apiKey) {
