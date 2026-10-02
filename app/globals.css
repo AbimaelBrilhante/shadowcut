@@ -457,3 +457,176 @@ h1 span { color: var(--accent); }
     flex-direction: column;
   }
 }
+
+
+.continue-card {
+  margin: 0 0 22px;
+  padding: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+.continue-card h2 { margin: 4px 0 6px; font-size: 20px; }
+.continue-card p { margin: 0; color: var(--muted); }
+
+.detail-loading {
+  margin-top: 10px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #dce8c3;
+  background: #151b11;
+  border: 1px solid #374624;
+  border-radius: 11px;
+  font-size: 12px;
+}
+.mini-spinner {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  border: 2px solid #46552f;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+
+.translation-toggle {
+  margin: 8px auto 0;
+  display: block;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  text-decoration: underline;
+}
+
+.practice-box,
+.timing-box,
+.recording-box,
+.chunks-box {
+  margin-top: 14px;
+  padding: 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.practice-head,
+.timing-head,
+.chunks-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.practice-head > div,
+.timing-head > div,
+.recording-box > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+.small-label {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .12em;
+}
+.practice-settings {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.practice-settings label {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 7px;
+}
+.segmented.three { grid-template-columns: repeat(3, 1fr); }
+.auto-status {
+  margin: 10px 0 0;
+  color: #dce8c3;
+  font-size: 12px;
+}
+
+.timing-controls {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.timing-controls button,
+.link-button {
+  border: 1px solid var(--line);
+  background: #101419;
+  color: var(--text);
+  border-radius: 9px;
+  padding: 8px 6px;
+  font-size: 11px;
+}
+.link-button {
+  background: transparent;
+  color: var(--muted);
+}
+
+.recording-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+}
+.recording-actions button { flex: 1; }
+.recording-player {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.chunks-head h3 { margin: 4px 0 0; font-size: 16px; }
+.chunk-actions { display: flex; gap: 6px; }
+.chunks-list {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+.chunk-card {
+  padding: 11px 12px;
+  display: grid;
+  gap: 4px;
+  border-radius: 11px;
+  background: #101419;
+  border: 1px solid #2b333b;
+}
+.chunk-card strong { color: var(--text); }
+.chunk-card span { color: var(--accent); font-size: 13px; }
+.chunk-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+@media (max-width: 620px) {
+  .continue-card,
+  .practice-head,
+  .timing-head,
+  .chunks-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .continue-card button { width: 100%; }
+
+  .practice-settings { grid-template-columns: 1fr; }
+
+  .timing-controls { grid-template-columns: 1fr 1fr; }
+
+  .recording-actions,
+  .chunk-actions {
+    flex-direction: column;
+  }
+
+  .recording-actions button,
+  .chunk-actions button {
+    width: 100%;
+  }
+}
