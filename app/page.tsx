@@ -202,7 +202,7 @@ export default function Home() {
     const target = baseAnalysis.clips[safeIndex];
     if (
       !target ||
-      (target.detailsReady && (target.detailsVersion ?? 0) >= 3)
+      (target.detailsReady && (target.detailsVersion ?? 0) >= 4)
     ) {
       return baseAnalysis;
     }
@@ -212,7 +212,7 @@ export default function Home() {
 
     try {
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 90000);
+      const timeout = window.setTimeout(() => controller.abort(), 45000);
 
       let res: Response;
       try {
@@ -245,7 +245,7 @@ export default function Home() {
                 sentences: data.sentences ?? [],
                 chunks: data.chunks ?? [],
                 detailsReady: true,
-                detailsVersion: data.detailsVersion ?? 3
+                detailsVersion: data.detailsVersion ?? 4
               }
             : item
         )
@@ -265,7 +265,7 @@ export default function Home() {
     } catch (e) {
       const message =
         e instanceof DOMException && e.name === "AbortError"
-          ? "A preparação da legenda demorou mais de 90 segundos. Tente novamente."
+          ? "A preparação da legenda demorou mais de 45 segundos. Tente novamente."
           : e instanceof Error
             ? e.message
             : "Não consegui preparar a legenda deste corte.";
@@ -376,12 +376,13 @@ export default function Home() {
     if (!analysis || !clip) return;
     stopAutoShadowing();
 
-    const hydrated = await ensureClipDetails(analysis, selected);
-    const target = hydrated.clips[selected];
-    if (!target) return;
-
-    player.current?.playRange(target.startSec, target.endSec);
+    // Playback should never wait for AI preparation.
+    player.current?.playRange(clip.startSec, clip.endSec);
     player.current?.setRate(rate);
+
+    if (!clip.detailsReady || (clip.detailsVersion ?? 0) < 4) {
+      void ensureClipDetails(analysis, selected);
+    }
   }
 
   async function selectClip(index: number) {
@@ -395,12 +396,13 @@ export default function Home() {
     setRevealTranslation(false);
     void persistProgress(studiedClipIds, index);
 
-    const hydrated = await ensureClipDetails(analysis, index);
-    const target = hydrated.clips[index];
-    if (!target) return;
-
-    player.current?.playRange(target.startSec, target.endSec);
+    // Start video immediately; subtitles can finish in the background.
+    player.current?.playRange(next.startSec, next.endSec);
     player.current?.setRate(rate);
+
+    if (!next.detailsReady || (next.detailsVersion ?? 0) < 4) {
+      void ensureClipDetails(analysis, index);
+    }
   }
 
   function playSentenceAt(index: number) {
@@ -919,7 +921,6 @@ Pedido: revise os chunks, elimine os pouco úteis, evite duplicatas e adicione o
               <button
                 className="play-clip"
                 onClick={() => void playClip()}
-                disabled={detailsLoading}
               >
                 ▶ Tocar este corte
               </button>
