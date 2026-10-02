@@ -186,13 +186,7 @@ Retorne SOMENTE JSON válido:
       "pt": "Tradução natural."
     }
   ],
-  "chunks": [
-    {
-      "en": "useful chunk",
-      "pt": "tradução",
-      "note": "Explicação curta de uso."
-    }
-  ]
+  "chunks": []
 }
 `.trim();
 
@@ -225,7 +219,9 @@ Retorne SOMENTE JSON válido:
         ],
         generationConfig: {
           responseMimeType: "application/json",
-          temperature: 0
+          thinkingConfig: {
+            thinkingLevel: model === "gemini-3.8-flash" ? "low" : "minimal"
+          }
         }
       })
     }
@@ -297,7 +293,7 @@ export async function POST(req: NextRequest) {
     // Prefer the stronger Flash model for subtitle accuracy; Lite is only a fallback.
     const preferredModel = process.env.GEMINI_MODEL || "gemini-3.8-flash";
     const models = Array.from(
-      new Set([preferredModel, "gemini-3.5-flash", "gemini-3.5-flash-lite"])
+      new Set(["gemini-3.5-flash-lite", "gemini-3.5-flash", preferredModel])
     );
 
     const canonicalYouTubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
@@ -349,7 +345,7 @@ export async function POST(req: NextRequest) {
     // without firing every free-tier request at once.
     const allSentences: Sentence[] = [];
     const allChunks: Chunk[] = [];
-    const CONCURRENCY = 2;
+    const CONCURRENCY = 4;
 
     for (let i = 0; i < windows.length; i += CONCURRENCY) {
       const batch = windows.slice(i, i + CONCURRENCY);
@@ -374,7 +370,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       sentences,
       chunks,
-      detailsVersion: 3
+      detailsVersion: 4
     });
   } catch (error) {
     console.error(error);
