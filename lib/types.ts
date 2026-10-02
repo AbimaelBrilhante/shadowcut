@@ -20,6 +20,7 @@ export type Clip = {
   difficulty: string;
   sentences: Sentence[];
   chunks?: Chunk[];
+  detailsReady?: boolean;
 };
 
 export type AnalysisResult = {
