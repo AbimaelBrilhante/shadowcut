@@ -142,7 +142,7 @@ FORMATO:
         model,
         input: [
           { type: "text", text: prompt },
-          { type: "video", uri: sourceUrl }
+          { type: "video", uri: sourceUrl, processing: "agentic" }
         ]
       })
     });
