@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
 
     const preferredModel = process.env.GEMINI_MODEL || "gemini-3.8-flash";
     const models = Array.from(
-      new Set([preferredModel, "gemini-3.5-flash-lite", "gemini-3.5-flash"])
+      new Set([preferredModel, "gemini-3.5-flash", "gemini-3.5-flash-lite"])
     );
 
     const canonicalYouTubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
@@ -110,18 +110,21 @@ Você está preparando um exercício de shadowing em inglês.
 Analise SOMENTE o intervalo do vídeo que vai de ${clipStart.toFixed(1)}s a ${clipEnd.toFixed(1)}s no vídeo original.
 
 OBJETIVO:
-1. Transcrever TODO o inglês falado nesse intervalo, do começo ao fim.
-2. Dividir em frases curtas e naturais para shadowing.
-3. Traduzir cada frase naturalmente para português brasileiro.
+1. Transcrever TODO o inglês falado nesse intervalo, sem resumir nem pular trechos.
+2. Dividir a fala em CUES CURTOS de legenda, normalmente entre 2 e 6 segundos cada.
+3. Traduzir cada cue naturalmente para português brasileiro.
 4. Extrair de 3 a 6 chunks realmente úteis e reutilizáveis do trecho.
 
 TIMESTAMPS:
 - startSec e endSec devem ser ABSOLUTOS no vídeo original.
 - O corte começa em ${clipStart.toFixed(1)}s e dura ${clipDuration.toFixed(1)}s.
 - Se você raciocinar em tempo relativo ao corte, some ${clipStart.toFixed(1)} a cada timestamp.
+- Use precisão aproximada de 0,5 a 1 segundo; não invente precisão falsa.
+- Durante fala contínua, não deixe buracos grandes entre um cue e outro.
+- Cada trecho falado deve aparecer em exatamente um cue.
 - Não deixe a transcrição parar antes da última fala do intervalo.
-- Preserve a ordem cronológica.
-- Não invente conteúdo.
+- Preserve rigorosamente a ordem cronológica.
+- Não resuma, não parafraseie e não invente conteúdo.
 
 CHUNKS:
 - escolha expressões naturais que um aluno B1/B2 realmente poderia reutilizar;
@@ -172,9 +175,9 @@ Retorne SOMENTE JSON válido:
                     },
                     videoMetadata: {
                       startOffset: `${clipStart}s`,
-                      endOffset: `${clipEnd}s`
-                    },
-                    mediaProcessing: "STATIC"
+                      endOffset: `${clipEnd}s`,
+                      fps: 2
+                    }
                   },
                   { text: prompt }
                 ]
@@ -202,9 +205,45 @@ Retorne SOMENTE JSON válido:
         }
 
         try {
-          return NextResponse.json(
-            normalizeDetails(JSON.parse(cleanJson(outputText)), clipStart, clipEnd)
+          const normalized = normalizeDetails(
+            JSON.parse(cleanJson(outputText)),
+            clipStart,
+            clipEnd
           );
+
+          const coveredSeconds = normalized.sentences.reduce(
+            (sum, item) => sum + Math.max(0, item.endSec - item.startSec),
+            0
+          );
+          const coverageRatio = coveredSeconds / Math.max(1, clipEnd - clipStart);
+
+          let largestGap = 0;
+          for (let i = 1; i < normalized.sentences.length; i += 1) {
+            largestGap = Math.max(
+              largestGap,
+              normalized.sentences[i].startSec - normalized.sentences[i - 1].endSec
+            );
+          }
+
+          // Selected ShadowCut clips are intentionally speech-heavy. Very sparse
+          // cue coverage usually means the model skipped spoken material.
+          if (coverageRatio < 0.42 || largestGap > 8) {
+            lastDiagnostic = `${model}: legenda muito esparsa (cobertura ${Math.round(
+              coverageRatio * 100
+            )}%, maior intervalo ${largestGap.toFixed(1)}s)`;
+            console.error("Clip subtitle coverage rejected", {
+              model,
+              coverageRatio,
+              largestGap,
+              sentenceCount: normalized.sentences.length
+            });
+            continue;
+          }
+
+          return NextResponse.json({
+            ...normalized,
+            detailsVersion: 2
+          });
         } catch (error) {
           lastDiagnostic = `${model}: resposta incompleta ou inválida`;
           console.error("Clip details parse", model, outputText.slice(0, 1500), error);
