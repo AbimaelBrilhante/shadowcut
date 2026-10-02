@@ -67,6 +67,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Cole um link válido do YouTube." }, { status: 400 });
     }
 
+    const canonicalYouTubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+
     const apiKey = process.env.GEMINI_API_KEY;
     const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 
@@ -142,7 +144,7 @@ FORMATO:
         model,
         input: [
           { type: "text", text: prompt },
-          { type: "video", uri: sourceUrl, processing: "agentic" }
+          { type: "video", uri: canonicalYouTubeUrl }
         ]
       })
     });
@@ -158,8 +160,14 @@ FORMATO:
         );
       }
 
+      let apiMessage = "";
+      try {
+        const parsed = JSON.parse(detail);
+        apiMessage = String(parsed?.error?.message ?? "").trim();
+      } catch {}
+
       return NextResponse.json(
-        { error: `Não consegui analisar o vídeo (erro ${response.status}). Confirme que ele é público.` },
+        { error: apiMessage ? `Gemini: ${apiMessage}` : `Não consegui analisar o vídeo (erro ${response.status}). Confirme que ele é público.` },
         { status: 502 }
       );
     }
@@ -168,7 +176,7 @@ FORMATO:
     const outputText = String(payload.output_text ?? "").trim();
     if (!outputText) throw new Error("A IA respondeu sem conteúdo utilizável.");
 
-    return NextResponse.json(normalize(JSON.parse(cleanJson(outputText)), videoId, sourceUrl));
+    return NextResponse.json(normalize(JSON.parse(cleanJson(outputText)), videoId, canonicalYouTubeUrl));
   } catch (error) {
     console.error(error);
     const message = error instanceof Error ? error.message : "Erro inesperado.";
