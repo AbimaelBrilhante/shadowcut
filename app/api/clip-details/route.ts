@@ -3,43 +3,57 @@ import { extractYouTubeId } from "../../../lib/youtube";
 import type { Chunk, Sentence } from "../../../lib/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 180;
 
 function cleanJson(text: string) {
   return text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
 }
 
-function normalizeDetails(
+function normalizeText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9' ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeWindow(
   value: unknown,
-  clipStart: number,
-  clipEnd: number
+  windowStart: number,
+  windowEnd: number
 ): { sentences: Sentence[]; chunks: Chunk[] } {
   if (!value || typeof value !== "object") {
-    throw new Error("Resposta vazia na transcrição do corte.");
+    throw new Error("Resposta vazia.");
   }
 
   const data = value as Record<string, unknown>;
   const rawSentences = Array.isArray(data.sentences) ? data.sentences : [];
   const rawChunks = Array.isArray(data.chunks) ? data.chunks : [];
+  const windowDuration = windowEnd - windowStart;
 
   const sentences = rawSentences
     .map((raw) => {
       const s = raw as Record<string, unknown>;
       let startSec = Number(s.startSec);
       let endSec = Number(s.endSec);
+
       if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec <= startSec) {
         return null;
       }
 
-      // If the model accidentally returned clip-relative timestamps, convert them.
-      const clipDuration = clipEnd - clipStart;
-      if (startSec >= 0 && endSec <= clipDuration + 2 && clipStart > 3) {
-        startSec += clipStart;
-        endSec += clipStart;
+      // Models sometimes return offsets relative to the small window instead
+      // of absolute timestamps. Detect that and convert to video time.
+      if (
+        startSec >= -0.5 &&
+        endSec <= windowDuration + 1.5 &&
+        windowStart > 2
+      ) {
+        startSec += windowStart;
+        endSec += windowStart;
       }
 
-      startSec = Math.max(clipStart, Math.min(startSec, clipEnd));
-      endSec = Math.max(startSec + 0.05, Math.min(endSec, clipEnd));
+      startSec = Math.max(windowStart, Math.min(startSec, windowEnd));
+      endSec = Math.max(startSec + 0.08, Math.min(endSec, windowEnd));
 
       const en = String(s.en ?? "").trim();
       const pt = String(s.pt ?? "").trim();
@@ -59,14 +73,198 @@ function normalizeDetails(
       if (!en || !pt) return null;
       return { en, pt, note };
     })
-    .filter(Boolean)
-    .slice(0, 8) as Chunk[];
+    .filter(Boolean) as Chunk[];
 
   if (!sentences.length) {
-    throw new Error("Não consegui obter a transcrição completa deste corte.");
+    throw new Error("Janela sem transcrição utilizável.");
   }
 
   return { sentences, chunks };
+}
+
+function mergeSentences(items: Sentence[], clipStart: number, clipEnd: number) {
+  const sorted = items
+    .filter((item) => item.endSec > clipStart && item.startSec < clipEnd)
+    .sort((a, b) => a.startSec - b.startSec);
+
+  const merged: Sentence[] = [];
+
+  for (const item of sorted) {
+    const current = {
+      ...item,
+      startSec: Math.max(clipStart, item.startSec),
+      endSec: Math.min(clipEnd, item.endSec)
+    };
+
+    const normalized = normalizeText(current.en);
+    if (!normalized) continue;
+
+    const duplicateIndex = merged.findIndex((existing) => {
+      const other = normalizeText(existing.en);
+      const closeInTime = Math.abs(existing.startSec - current.startSec) <= 4;
+      const sameText =
+        other === normalized ||
+        (other.length > 20 &&
+          normalized.length > 20 &&
+          (other.includes(normalized) || normalized.includes(other)));
+
+      return closeInTime && sameText;
+    });
+
+    if (duplicateIndex >= 0) {
+      const existing = merged[duplicateIndex];
+      // Keep the wider timing window for overlap duplicates.
+      merged[duplicateIndex] = {
+        ...existing,
+        startSec: Math.min(existing.startSec, current.startSec),
+        endSec: Math.max(existing.endSec, current.endSec),
+        pt: existing.pt || current.pt
+      };
+      continue;
+    }
+
+    merged.push(current);
+  }
+
+  return merged.sort((a, b) => a.startSec - b.startSec);
+}
+
+function mergeChunks(items: Chunk[]) {
+  const seen = new Set<string>();
+  const result: Chunk[] = [];
+
+  for (const item of items) {
+    const key = normalizeText(item.en);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+    if (result.length >= 8) break;
+  }
+
+  return result;
+}
+
+async function requestWindow(params: {
+  apiKey: string;
+  model: string;
+  youtubeUrl: string;
+  startSec: number;
+  endSec: number;
+}) {
+  const { apiKey, model, youtubeUrl, startSec, endSec } = params;
+  const duration = endSec - startSec;
+
+  const prompt = `
+Você está transcrevendo uma janela CURTA de áudio de um vídeo para um exercício de shadowing.
+
+JANELA EXATA:
+- início no vídeo original: ${startSec.toFixed(1)}s
+- fim no vídeo original: ${endSec.toFixed(1)}s
+- duração: ${duration.toFixed(1)}s
+
+TAREFA:
+1. Ouça cuidadosamente TODO o áudio desta janela.
+2. Transcreva TODO o inglês falado, sem resumir e sem pular frases.
+3. Divida em cues curtos e naturais, geralmente de 2 a 6 segundos.
+4. Traduza cada cue para português brasileiro.
+5. Extraia no máximo 2 chunks úteis desta pequena janela.
+
+TIMESTAMPS:
+- startSec e endSec devem ser ABSOLUTOS no vídeo original.
+- Se usar tempo relativo à janela, some ${startSec.toFixed(1)}s.
+- Durante fala contínua, mantenha os cues consecutivos, sem lacunas artificiais.
+- Não invente fala.
+- Não use conhecimento externo para completar o que não ouviu.
+
+Retorne SOMENTE JSON válido:
+{
+  "sentences": [
+    {
+      "startSec": 123.0,
+      "endSec": 126.5,
+      "en": "Exact English speech.",
+      "pt": "Tradução natural."
+    }
+  ],
+  "chunks": [
+    {
+      "en": "useful chunk",
+      "pt": "tradução",
+      "note": "Explicação curta de uso."
+    }
+  ]
+}
+`.trim();
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                fileData: {
+                  fileUri: youtubeUrl,
+                  mimeType: "video/*"
+                },
+                videoMetadata: {
+                  startOffset: `${startSec}s`,
+                  endOffset: `${endSec}s`
+                }
+              },
+              { text: prompt }
+            ]
+          }
+        ],
+        generationConfig: {
+          responseMimeType: "application/json",
+          temperature: 0
+        }
+      })
+    }
+  );
+
+  if (!response.ok) {
+    const detail = await response.text();
+    let code = "";
+    let message = "";
+
+    try {
+      const parsed = JSON.parse(detail);
+      code = String(parsed?.error?.status ?? parsed?.error?.code ?? "").trim();
+      message = String(parsed?.error?.message ?? "").trim();
+    } catch {}
+
+    const error = new Error(
+      [model, code, message || `HTTP ${response.status}`]
+        .filter(Boolean)
+        .join(" — ")
+    ) as Error & { status?: number; apiCode?: string };
+
+    error.status = response.status;
+    error.apiCode = code;
+    throw error;
+  }
+
+  const payload = await response.json() as Record<string, any>;
+  const outputText = String(
+    payload?.candidates?.[0]?.content?.parts
+      ?.map((part: Record<string, unknown>) => String(part?.text ?? ""))
+      .join("") ?? ""
+  ).trim();
+
+  if (!outputText) {
+    throw new Error(`${model}: resposta sem texto`);
+  }
+
+  return normalizeWindow(JSON.parse(cleanJson(outputText)), startSec, endSec);
 }
 
 export async function POST(req: NextRequest) {
@@ -96,189 +294,98 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "GEMINI_API_KEY não configurada." }, { status: 500 });
     }
 
+    // Prefer the stronger Flash model for subtitle accuracy; Lite is only a fallback.
     const preferredModel = process.env.GEMINI_MODEL || "gemini-3.8-flash";
     const models = Array.from(
       new Set([preferredModel, "gemini-3.5-flash", "gemini-3.5-flash-lite"])
     );
 
     const canonicalYouTubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    const clipDuration = clipEnd - clipStart;
 
-    const prompt = `
-Você está preparando um exercício de shadowing em inglês.
+    // A long single request was skipping spoken passages. Small overlapping
+    // windows trade a few extra first-time calls for much better completeness.
+    const WINDOW_SECONDS = 20;
+    const OVERLAP_SECONDS = 2;
+    const windows: Array<{ startSec: number; endSec: number }> = [];
 
-Analise SOMENTE o intervalo do vídeo que vai de ${clipStart.toFixed(1)}s a ${clipEnd.toFixed(1)}s no vídeo original.
-
-OBJETIVO:
-1. Transcrever TODO o inglês falado nesse intervalo, sem resumir nem pular trechos.
-2. Dividir a fala em CUES CURTOS de legenda, normalmente entre 2 e 6 segundos cada.
-3. Traduzir cada cue naturalmente para português brasileiro.
-4. Extrair de 3 a 6 chunks realmente úteis e reutilizáveis do trecho.
-
-TIMESTAMPS:
-- startSec e endSec devem ser ABSOLUTOS no vídeo original.
-- O corte começa em ${clipStart.toFixed(1)}s e dura ${clipDuration.toFixed(1)}s.
-- Se você raciocinar em tempo relativo ao corte, some ${clipStart.toFixed(1)} a cada timestamp.
-- Use precisão aproximada de 0,5 a 1 segundo; não invente precisão falsa.
-- Durante fala contínua, não deixe buracos grandes entre um cue e outro.
-- Cada trecho falado deve aparecer em exatamente um cue.
-- Não deixe a transcrição parar antes da última fala do intervalo.
-- Preserve rigorosamente a ordem cronológica.
-- Não resuma, não parafraseie e não invente conteúdo.
-
-CHUNKS:
-- escolha expressões naturais que um aluno B1/B2 realmente poderia reutilizar;
-- evite palavras isoladas;
-- "note" deve explicar rapidamente uso/nuance em português.
-
-Retorne SOMENTE JSON válido:
-{
-  "sentences": [
-    {
-      "startSec": 123.0,
-      "endSec": 127.4,
-      "en": "English sentence.",
-      "pt": "Tradução natural."
+    let cursor = clipStart;
+    while (cursor < clipEnd - 0.05) {
+      const end = Math.min(clipEnd, cursor + WINDOW_SECONDS);
+      windows.push({ startSec: cursor, endSec: end });
+      if (end >= clipEnd) break;
+      cursor = Math.max(cursor + 1, end - OVERLAP_SECONDS);
     }
-  ],
-  "chunks": [
-    {
-      "en": "ended up doing",
-      "pt": "acabou fazendo",
-      "note": "Usado para um resultado final, muitas vezes não planejado."
-    }
-  ]
-}
-`.trim();
 
-    let lastDiagnostic = "";
-    let lastStatus = 502;
+    const allSentences: Sentence[] = [];
+    const allChunks: Chunk[] = [];
 
-    for (const model of models) {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": apiKey
-          },
-          body: JSON.stringify({
-            contents: [
-              {
-                role: "user",
-                parts: [
-                  {
-                    fileData: {
-                      fileUri: canonicalYouTubeUrl,
-                      mimeType: "video/*"
-                    },
-                    videoMetadata: {
-                      startOffset: `${clipStart}s`,
-                      endOffset: `${clipEnd}s`
-                    }
-                  },
-                  { text: prompt }
-                ]
-              }
-            ],
-            generationConfig: {
-              responseMimeType: "application/json",
-              temperature: 0.1
-            }
-          })
-        }
-      );
+    for (const window of windows) {
+      let completed = false;
+      let lastError = "";
 
-      if (response.ok) {
-        const payload = await response.json() as Record<string, any>;
-        const outputText = String(
-          payload?.candidates?.[0]?.content?.parts
-            ?.map((part: Record<string, unknown>) => String(part?.text ?? ""))
-            .join("") ?? ""
-        ).trim();
-
-        if (!outputText) {
-          lastDiagnostic = `${model}: resposta sem texto`;
-          continue;
-        }
-
+      for (const model of models) {
         try {
-          const normalized = normalizeDetails(
-            JSON.parse(cleanJson(outputText)),
-            clipStart,
-            clipEnd
-          );
+          const result = await requestWindow({
+            apiKey,
+            model,
+            youtubeUrl: canonicalYouTubeUrl,
+            startSec: window.startSec,
+            endSec: window.endSec
+          });
 
-          const coveredSeconds = normalized.sentences.reduce(
-            (sum, item) => sum + Math.max(0, item.endSec - item.startSec),
-            0
-          );
-          const coverageRatio = coveredSeconds / Math.max(1, clipEnd - clipStart);
+          allSentences.push(...result.sentences);
+          allChunks.push(...result.chunks);
+          completed = true;
+          break;
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : "Erro desconhecido";
+          console.error("Subtitle window failed", {
+            window,
+            model,
+            error: lastError
+          });
 
-          let largestGap = 0;
-          for (let i = 1; i < normalized.sentences.length; i += 1) {
-            largestGap = Math.max(
-              largestGap,
-              normalized.sentences[i].startSec - normalized.sentences[i - 1].endSec
+          const typed = error as Error & { status?: number; apiCode?: string };
+          const retryable =
+            [429, 500, 502, 503, 504].includes(typed.status ?? 0) ||
+            ["UNAVAILABLE", "RESOURCE_EXHAUSTED", "INTERNAL"].includes(
+              typed.apiCode ?? ""
             );
-          }
 
-          // Selected ShadowCut clips are intentionally speech-heavy. Very sparse
-          // cue coverage usually means the model skipped spoken material.
-          if (coverageRatio < 0.5 || largestGap > 5.5) {
-            lastDiagnostic = `${model}: legenda muito esparsa (cobertura ${Math.round(
-              coverageRatio * 100
-            )}%, maior intervalo ${largestGap.toFixed(1)}s)`;
-            console.error("Clip subtitle coverage rejected", {
-              model,
-              coverageRatio,
-              largestGap,
-              sentenceCount: normalized.sentences.length
-            });
+          // Also try another model for malformed/empty transcription output.
+          if (!retryable && typed.status && typed.status < 500) {
             continue;
           }
-
-          return NextResponse.json({
-            ...normalized,
-            detailsVersion: 2
-          });
-        } catch (error) {
-          lastDiagnostic = `${model}: resposta incompleta ou inválida`;
-          console.error("Clip details parse", model, outputText.slice(0, 1500), error);
-          continue;
         }
       }
 
-      const detail = await response.text();
-      console.error("Clip details Gemini", model, response.status, detail);
-
-      let apiMessage = "";
-      let apiCode = "";
-      try {
-        const parsed = JSON.parse(detail);
-        apiMessage = String(parsed?.error?.message ?? "").trim();
-        apiCode = String(parsed?.error?.status ?? parsed?.error?.code ?? "").trim();
-      } catch {}
-
-      lastDiagnostic = [model, apiCode, apiMessage].filter(Boolean).join(": ");
-      lastStatus = response.status;
-
-      const retryable =
-        [429, 500, 502, 503, 504].includes(response.status) ||
-        ["UNAVAILABLE", "RESOURCE_EXHAUSTED", "INTERNAL"].includes(apiCode);
-
-      if (!retryable) break;
+      if (!completed) {
+        return NextResponse.json(
+          {
+            error: `Não consegui transcrever a janela ${window.startSec.toFixed(
+              1
+            )}s–${window.endSec.toFixed(1)}s. ${lastError}`
+          },
+          { status: 502 }
+        );
+      }
     }
 
-    return NextResponse.json(
-      {
-        error: lastDiagnostic
-          ? `Gemini: ${lastDiagnostic}`
-          : "Não consegui transcrever este corte."
-      },
-      { status: lastStatus === 429 ? 429 : 502 }
-    );
+    const sentences = mergeSentences(allSentences, clipStart, clipEnd);
+    const chunks = mergeChunks(allChunks);
+
+    if (!sentences.length) {
+      return NextResponse.json(
+        { error: "A transcrição segmentada voltou sem frases utilizáveis." },
+        { status: 502 }
+      );
+    }
+
+    return NextResponse.json({
+      sentences,
+      chunks,
+      detailsVersion: 3
+    });
   } catch (error) {
     console.error(error);
     return NextResponse.json(
