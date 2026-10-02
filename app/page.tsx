@@ -202,7 +202,7 @@ export default function Home() {
     const target = baseAnalysis.clips[safeIndex];
     if (
       !target ||
-      (target.detailsReady && (target.detailsVersion ?? 0) >= 2)
+      (target.detailsReady && (target.detailsVersion ?? 0) >= 3)
     ) {
       return baseAnalysis;
     }
@@ -236,7 +236,7 @@ export default function Home() {
                 sentences: data.sentences ?? [],
                 chunks: data.chunks ?? [],
                 detailsReady: true,
-                detailsVersion: data.detailsVersion ?? 2
+                detailsVersion: data.detailsVersion ?? 3
               }
             : item
         )
@@ -931,7 +931,7 @@ Pedido: revise os chunks, elimine os pouco úteis, evite duplicatas e adicione o
                 ) : (
                   <span className="muted">
                     {clip.detailsReady
-                      ? "Sem fala neste instante."
+                      ? "Legenda indisponível neste instante."
                       : "Toque o corte para preparar as frases."}
                   </span>
                 )}
