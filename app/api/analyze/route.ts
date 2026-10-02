@@ -134,24 +134,41 @@ FORMATO:
 }
 `.trim();
 
-    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey
-      },
-      body: JSON.stringify({
-        model,
-        input: [
-          { type: "text", text: prompt },
-          { type: "video", uri: canonicalYouTubeUrl }
-        ]
-      })
-    });
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  fileData: {
+                    fileUri: canonicalYouTubeUrl
+                  }
+                },
+                {
+                  text: prompt
+                }
+              ]
+            }
+          ],
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.2
+          }
+        })
+      }
+    );
 
     if (!response.ok) {
       const detail = await response.text();
-      console.error("Gemini API", response.status, detail);
+      console.error("Gemini generateContent", response.status, detail);
 
       if (response.status === 429) {
         return NextResponse.json(
@@ -161,22 +178,43 @@ FORMATO:
       }
 
       let apiMessage = "";
+      let apiCode = "";
       try {
         const parsed = JSON.parse(detail);
         apiMessage = String(parsed?.error?.message ?? "").trim();
+        apiCode = String(parsed?.error?.status ?? parsed?.error?.code ?? "").trim();
       } catch {}
 
+      const diagnostic = [apiCode, apiMessage].filter(Boolean).join(" — ");
       return NextResponse.json(
-        { error: apiMessage ? `Gemini: ${apiMessage}` : `Não consegui analisar o vídeo (erro ${response.status}). Confirme que ele é público.` },
+        {
+          error: diagnostic
+            ? `Gemini: ${diagnostic}`
+            : `Gemini retornou erro ${response.status}: ${detail.slice(0, 300)}`
+        },
         { status: 502 }
       );
     }
 
-    const payload = await response.json() as Record<string, unknown>;
-    const outputText = String(payload.output_text ?? "").trim();
-    if (!outputText) throw new Error("A IA respondeu sem conteúdo utilizável.");
+    const payload = await response.json() as Record<string, any>;
+    const outputText = String(
+      payload?.candidates?.[0]?.content?.parts
+        ?.map((part: Record<string, unknown>) => String(part?.text ?? ""))
+        .join("") ?? ""
+    ).trim();
 
-    return NextResponse.json(normalize(JSON.parse(cleanJson(outputText)), videoId, canonicalYouTubeUrl));
+    if (!outputText) {
+      const finishReason = String(payload?.candidates?.[0]?.finishReason ?? "");
+      throw new Error(
+        finishReason
+          ? `A IA não retornou texto utilizável (motivo: ${finishReason}).`
+          : "A IA respondeu sem conteúdo utilizável."
+      );
+    }
+
+    return NextResponse.json(
+      normalize(JSON.parse(cleanJson(outputText)), videoId, canonicalYouTubeUrl)
+    );
   } catch (error) {
     console.error(error);
     const message = error instanceof Error ? error.message : "Erro inesperado.";
