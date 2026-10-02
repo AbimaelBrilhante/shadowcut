@@ -289,3 +289,171 @@ h1 span { color: var(--accent); }
   .controls button { font-size: 12px; padding-inline: 5px; }
   .subtitle-stage { min-height: 140px; }
 }
+
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-toggle {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.history-panel {
+  margin-top: 18px;
+  padding: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+
+.history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.history-head h2 {
+  margin: 4px 0 0;
+}
+
+.history-tools,
+.history-card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.compact {
+  padding: 8px 11px !important;
+  font-size: 12px;
+}
+
+.history-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.history-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.history-card h3 {
+  margin: 5px 0;
+  font-size: 15px;
+}
+
+.history-card p,
+.history-footnote,
+.history-empty {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+.history-progress {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.danger-button {
+  border: 1px solid #663d3d;
+  background: #211414;
+  color: var(--danger);
+  border-radius: 10px;
+}
+
+.history-footnote {
+  margin-top: 12px;
+}
+
+.notice {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid #465b29;
+  background: #151d0f;
+  border-radius: 12px;
+  color: #dfffa0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.notice button {
+  border: 1px solid #607a36;
+  background: transparent;
+  color: var(--accent);
+  border-radius: 9px;
+  padding: 7px 9px;
+  white-space: nowrap;
+}
+
+.studied-button {
+  width: 100%;
+  margin-top: 9px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 11px;
+  padding: 10px;
+}
+
+.studied-button.active {
+  border-color: #536b2f;
+  color: var(--accent);
+  background: #141b0e;
+}
+
+.clip-card.done {
+  border-color: #405025;
+}
+
+.clip-card.done .clip-top span:first-child {
+  color: var(--accent);
+  font-weight: 900;
+}
+
+@media (max-width: 620px) {
+  .top-actions .pill {
+    display: none;
+  }
+
+  .history-head,
+  .history-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .history-tools,
+  .history-card-actions {
+    width: 100%;
+  }
+
+  .history-tools button,
+  .history-card-actions button {
+    flex: 1;
+  }
+
+  .notice {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
