@@ -194,6 +194,48 @@ export default function Home() {
 
   const onTime = useCallback((time: number) => setCurrentTime(time), []);
 
+  async function generateChunksInBackground(
+    videoId: string,
+    clipIndex: number,
+    sentences: Sentence[]
+  ) {
+    try {
+      const res = await fetch("/api/chunks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sentences })
+      });
+
+      const data = await res.json();
+      const chunks = Array.isArray(data?.chunks) ? data.chunks : [];
+      if (!chunks.length) return;
+
+      setAnalysis((current) => {
+        if (!current || current.videoId !== videoId) return current;
+        return {
+          ...current,
+          clips: current.clips.map((item, itemIndex) =>
+            itemIndex === clipIndex ? { ...item, chunks } : item
+          )
+        };
+      });
+
+      const session = await getSession(videoId);
+      if (session?.analysis?.clips?.[clipIndex]) {
+        session.analysis = {
+          ...session.analysis,
+          clips: session.analysis.clips.map((item, itemIndex) =>
+            itemIndex === clipIndex ? { ...item, chunks } : item
+          )
+        };
+        await saveSession(session);
+        await refreshHistory();
+      }
+    } catch {
+      // Chunks are optional and must never block subtitle playback.
+    }
+  }
+
   async function ensureClipDetails(
     baseAnalysis: AnalysisResult,
     index: number
@@ -261,6 +303,11 @@ export default function Home() {
       }
 
       await refreshHistory();
+      void generateChunksInBackground(
+        baseAnalysis.videoId,
+        safeIndex,
+        data.sentences ?? []
+      );
       return nextAnalysis;
     } catch (e) {
       const message =
