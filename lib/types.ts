@@ -5,6 +5,12 @@ export type Sentence = {
   pt: string;
 };
 
+export type Chunk = {
+  en: string;
+  pt: string;
+  note: string;
+};
+
 export type Clip = {
   id: string;
   title: string;
@@ -13,6 +19,7 @@ export type Clip = {
   why: string;
   difficulty: string;
   sentences: Sentence[];
+  chunks?: Chunk[];
 };
 
 export type AnalysisResult = {
@@ -22,11 +29,17 @@ export type AnalysisResult = {
   clips: Clip[];
 };
 
+export type SentenceAdjustment = {
+  startDelta: number;
+  endDelta: number;
+};
+
 export type SavedSession = {
   videoId: string;
   analysis: AnalysisResult;
   studiedClipIds: string[];
   lastClipIndex: number;
+  sentenceAdjustments?: Record<string, SentenceAdjustment>;
   createdAt: string;
   updatedAt: string;
 };
