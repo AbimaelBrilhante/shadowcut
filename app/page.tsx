@@ -166,7 +166,26 @@ export default function Home() {
       }
     }
 
-    // Do not keep the previous subtitle on screen during a gap.
+    // Gemini video timestamps are approximate to about one second. Bridge only
+    // small gaps between consecutive cues so brief timestamp drift does not
+    // make subtitles disappear while speech continues.
+    for (let i = 0; i < clip.sentences.length - 1; i += 1) {
+      const currentCue = adjustedSentenceAt(i, clip);
+      const nextCue = adjustedSentenceAt(i + 1, clip);
+      if (!currentCue || !nextCue) continue;
+
+      const gap = nextCue.startSec - currentCue.endSec;
+      if (
+        gap > 0 &&
+        gap <= 2.5 &&
+        currentTime > currentCue.endSec &&
+        currentTime < nextCue.startSec
+      ) {
+        const midpoint = currentCue.endSec + gap / 2;
+        return currentTime < midpoint ? i : i + 1;
+      }
+    }
+
     return -1;
   }, [clip, currentTime, sentenceAdjustments]);
 
@@ -181,7 +200,12 @@ export default function Home() {
   ): Promise<AnalysisResult> {
     const safeIndex = Math.max(0, Math.min(index, baseAnalysis.clips.length - 1));
     const target = baseAnalysis.clips[safeIndex];
-    if (!target || target.detailsReady) return baseAnalysis;
+    if (
+      !target ||
+      (target.detailsReady && (target.detailsVersion ?? 0) >= 2)
+    ) {
+      return baseAnalysis;
+    }
 
     setDetailsLoadingId(target.id);
     setError("");
@@ -211,7 +235,8 @@ export default function Home() {
                 ...item,
                 sentences: data.sentences ?? [],
                 chunks: data.chunks ?? [],
-                detailsReady: true
+                detailsReady: true,
+                detailsVersion: data.detailsVersion ?? 2
               }
             : item
         )
