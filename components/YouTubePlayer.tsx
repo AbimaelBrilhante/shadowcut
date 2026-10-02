@@ -5,11 +5,13 @@ import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } f
 export type PlayerHandle = {
   playRange: (startSec: number, endSec: number) => void;
   setRate: (rate: number) => void;
+  pause: () => void;
 };
 
 type Props = {
   videoId: string;
   onTime?: (seconds: number) => void;
+  onRangeEnd?: () => void;
 };
 
 declare global {
@@ -19,12 +21,25 @@ declare global {
   }
 }
 
-const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer({ videoId, onTime }, ref) {
+const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
+  { videoId, onTime, onRangeEnd },
+  ref
+) {
   const reactId = useId();
   const holderId = useRef(`yt-${reactId.replace(/:/g, "")}`);
   const playerRef = useRef<any>(null);
   const endRef = useRef<number | null>(null);
+  const onRangeEndRef = useRef(onRangeEnd);
+  const onTimeRef = useRef(onTime);
   const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    onRangeEndRef.current = onRangeEnd;
+  }, [onRangeEnd]);
+
+  useEffect(() => {
+    onTimeRef.current = onTime;
+  }, [onTime]);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,16 +87,17 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer({ v
       if (!p?.getCurrentTime) return;
 
       const current = Number(p.getCurrentTime()) || 0;
-      onTime?.(current);
+      onTimeRef.current?.(current);
 
       if (endRef.current !== null && current >= endRef.current - 0.05) {
         p.pauseVideo?.();
         endRef.current = null;
+        onRangeEndRef.current?.();
       }
-    }, 120);
+    }, 100);
 
     return () => window.clearInterval(timer);
-  }, [onTime]);
+  }, []);
 
   useImperativeHandle(ref, () => ({
     playRange(startSec, endSec) {
@@ -91,6 +107,10 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer({ v
     },
     setRate(rate) {
       playerRef.current?.setPlaybackRate?.(rate);
+    },
+    pause() {
+      endRef.current = null;
+      playerRef.current?.pauseVideo?.();
     }
   }), []);
 
