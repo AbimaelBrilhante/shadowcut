@@ -17,6 +17,10 @@ function normalizeText(value: string) {
     .trim();
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function normalizeWindow(
   value: unknown,
   windowStart: number,
@@ -41,8 +45,6 @@ function normalizeWindow(
         return null;
       }
 
-      // Models sometimes return offsets relative to the small window instead
-      // of absolute timestamps. Detect that and convert to video time.
       if (
         startSec >= -0.5 &&
         endSec <= windowDuration + 1.5 &&
@@ -113,7 +115,6 @@ function mergeSentences(items: Sentence[], clipStart: number, clipEnd: number) {
 
     if (duplicateIndex >= 0) {
       const existing = merged[duplicateIndex];
-      // Keep the wider timing window for overlap duplicates.
       merged[duplicateIndex] = {
         ...existing,
         startSec: Math.min(existing.startSec, current.startSec),
@@ -167,7 +168,7 @@ TAREFA:
 2. Transcreva TODO o inglês falado, sem resumir e sem pular frases.
 3. Divida em cues curtos e naturais, geralmente de 2 a 6 segundos.
 4. Traduza cada cue para português brasileiro.
-5. Extraia no máximo 2 chunks úteis desta pequena janela.
+5. NÃO extraia chunks nesta etapa. Priorize apenas a legenda.
 
 TIMESTAMPS:
 - startSec e endSec devem ser ABSOLUTOS no vídeo original.
@@ -219,9 +220,7 @@ Retorne SOMENTE JSON válido:
         ],
         generationConfig: {
           responseMimeType: "application/json",
-          thinkingConfig: {
-            thinkingLevel: model === "gemini-3.8-flash" ? "low" : "minimal"
-          }
+          thinkingConfig: { thinkingLevel: "minimal" }
         }
       })
     }
@@ -290,16 +289,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "GEMINI_API_KEY não configurada." }, { status: 500 });
     }
 
-    // Prefer the stronger Flash model for subtitle accuracy; Lite is only a fallback.
-    const preferredModel = process.env.GEMINI_MODEL || "gemini-3.8-flash";
-    const models = Array.from(
-      new Set(["gemini-3.5-flash-lite", "gemini-3.5-flash", preferredModel])
-    );
-
+    // Subtitle work favors the low-latency free-tier models. Do not fall back
+    // to 3.8 Flash: capacity spikes there should never break a study session.
+    const models = ["gemini-3.5-flash-lite", "gemini-3.5-flash"];
     const canonicalYouTubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-    // A long single request was skipping spoken passages. Small overlapping
-    // windows trade a few extra first-time calls for much better completeness.
     const WINDOW_SECONDS = 30;
     const OVERLAP_SECONDS = 2;
     const windows: Array<{ startSec: number; endSec: number }> = [];
@@ -312,10 +306,13 @@ export async function POST(req: NextRequest) {
       cursor = Math.max(cursor + 1, end - OVERLAP_SECONDS);
     }
 
-    async function processWindow(window: { startSec: number; endSec: number }) {
-      let lastError = "";
+    async function tryModel(
+      window: { startSec: number; endSec: number },
+      model: string
+    ) {
+      let lastError: unknown;
 
-      for (const model of models) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           return await requestWindow({
             apiKey,
@@ -325,36 +322,84 @@ export async function POST(req: NextRequest) {
             endSec: window.endSec
           });
         } catch (error) {
-          lastError = error instanceof Error ? error.message : "Erro desconhecido";
-          console.error("Subtitle window failed", {
-            window,
-            model,
-            error: lastError
-          });
+          lastError = error;
+          const typed = error as Error & { status?: number; apiCode?: string };
+          const transient =
+            [429, 500, 502, 503, 504].includes(typed.status ?? 0) ||
+            ["UNAVAILABLE", "RESOURCE_EXHAUSTED", "INTERNAL"].includes(
+              typed.apiCode ?? ""
+            );
+
+          if (!transient || attempt === 1) break;
+          await sleep(attempt === 0 ? 900 : 1800);
         }
       }
 
-      throw new Error(
-        `Não consegui transcrever a janela ${window.startSec.toFixed(
-          1
-        )}s–${window.endSec.toFixed(1)}s. ${lastError}`
-      );
+      throw lastError instanceof Error ? lastError : new Error("Falha na transcrição.");
     }
 
-    // Process small groups in parallel. This keeps the first preparation fast
-    // without firing every free-tier request at once.
+    async function processWindow(
+      window: { startSec: number; endSec: number },
+      allowSplit = true
+    ): Promise<{ sentences: Sentence[]; chunks: Chunk[] }> {
+      const diagnostics: string[] = [];
+
+      for (const model of models) {
+        try {
+          return await tryModel(window, model);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Erro desconhecido";
+          diagnostics.push(message);
+          console.error("Subtitle window failed", { window, model, error: message });
+        }
+      }
+
+      if (allowSplit && window.endSec - window.startSec > 18) {
+        const midpoint = (window.startSec + window.endSec) / 2;
+        const left = { startSec: window.startSec, endSec: Math.min(window.endSec, midpoint + 0.75) };
+        const right = { startSec: Math.max(window.startSec, midpoint - 0.75), endSec: window.endSec };
+
+        const settled = await Promise.allSettled([
+          processWindow(left, false),
+          processWindow(right, false)
+        ]);
+
+        const fulfilled = settled
+          .filter((item): item is PromiseFulfilledResult<{ sentences: Sentence[]; chunks: Chunk[] }> => item.status === "fulfilled")
+          .map((item) => item.value);
+
+        if (fulfilled.length) {
+          return {
+            sentences: fulfilled.flatMap((item) => item.sentences),
+            chunks: fulfilled.flatMap((item) => item.chunks)
+          };
+        }
+      }
+
+      throw new Error(diagnostics.at(-1) || "Janela indisponível temporariamente.");
+    }
+
     const allSentences: Sentence[] = [];
     const allChunks: Chunk[] = [];
-    const CONCURRENCY = 4;
+    const missingRanges: Array<{ startSec: number; endSec: number }> = [];
+    const CONCURRENCY = 2;
 
     for (let i = 0; i < windows.length; i += CONCURRENCY) {
       const batch = windows.slice(i, i + CONCURRENCY);
-      const results = await Promise.all(batch.map(processWindow));
+      const settled = await Promise.allSettled(batch.map((window) => processWindow(window)));
 
-      for (const result of results) {
-        allSentences.push(...result.sentences);
-        allChunks.push(...result.chunks);
-      }
+      settled.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          allSentences.push(...result.value.sentences);
+          allChunks.push(...result.value.chunks);
+        } else {
+          missingRanges.push(batch[index]);
+          console.error("Subtitle range left unavailable", {
+            window: batch[index],
+            error: result.reason instanceof Error ? result.reason.message : String(result.reason)
+          });
+        }
+      });
     }
 
     const sentences = mergeSentences(allSentences, clipStart, clipEnd);
@@ -362,15 +407,17 @@ export async function POST(req: NextRequest) {
 
     if (!sentences.length) {
       return NextResponse.json(
-        { error: "A transcrição segmentada voltou sem frases utilizáveis." },
-        { status: 502 }
+        { error: "Os modelos de legenda estão temporariamente indisponíveis. Tente novamente em alguns minutos." },
+        { status: 503 }
       );
     }
 
     return NextResponse.json({
       sentences,
       chunks,
-      detailsVersion: 4
+      missingRanges,
+      partial: missingRanges.length > 0,
+      detailsVersion: 5
     });
   } catch (error) {
     console.error(error);
