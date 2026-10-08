@@ -12,6 +12,8 @@ type Props = {
   videoId: string;
   onTime?: (seconds: number) => void;
   onRangeEnd?: () => void;
+  onDuration?: (seconds: number) => void;
+  onInvalidRange?: (startSec: number, endSec: number, duration: number) => void;
 };
 
 declare global {
@@ -21,28 +23,56 @@ declare global {
   }
 }
 
+type PendingRange = { startSec: number; endSec: number } | null;
+
 const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
-  { videoId, onTime, onRangeEnd },
+  { videoId, onTime, onRangeEnd, onDuration, onInvalidRange },
   ref
 ) {
   const reactId = useId();
   const holderId = useRef(`yt-${reactId.replace(/:/g, "")}`);
   const playerRef = useRef<any>(null);
   const endRef = useRef<number | null>(null);
+  const pendingRangeRef = useRef<PendingRange>(null);
+  const readyRef = useRef(false);
   const onRangeEndRef = useRef(onRangeEnd);
   const onTimeRef = useRef(onTime);
+  const onDurationRef = useRef(onDuration);
+  const onInvalidRangeRef = useRef(onInvalidRange);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     onRangeEndRef.current = onRangeEnd;
-  }, [onRangeEnd]);
-
-  useEffect(() => {
     onTimeRef.current = onTime;
-  }, [onTime]);
+    onDurationRef.current = onDuration;
+    onInvalidRangeRef.current = onInvalidRange;
+  }, [onRangeEnd, onTime, onDuration, onInvalidRange]);
+
+  function validateAndPlay(startSec: number, endSec: number) {
+    const player = playerRef.current;
+    if (!player?.seekTo) {
+      pendingRangeRef.current = { startSec, endSec };
+      return;
+    }
+
+    const duration = Number(player.getDuration?.()) || 0;
+    if (duration > 0 && (startSec < 0 || startSec >= duration - 0.25)) {
+      endRef.current = null;
+      player.pauseVideo?.();
+      onInvalidRangeRef.current?.(startSec, endSec, duration);
+      return;
+    }
+
+    const safeEnd = duration > 0 ? Math.min(endSec, duration) : endSec;
+    endRef.current = safeEnd;
+    player.seekTo(startSec, true);
+    player.playVideo?.();
+  }
 
   useEffect(() => {
     let cancelled = false;
+    readyRef.current = false;
+    pendingRangeRef.current = null;
 
     const createPlayer = () => {
       if (cancelled || !window.YT?.Player) return;
@@ -61,12 +91,19 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
         },
         events: {
           onReady: () => {
-            // Keep English captions inside the official YouTube player whenever
-            // the video exposes a caption track. AI captions become optional.
+            readyRef.current = true;
             try {
               playerRef.current?.setOption?.("captions", "track", { languageCode: "en" });
             } catch {}
+
+            const duration = Number(playerRef.current?.getDuration?.()) || 0;
+            if (duration > 0) onDurationRef.current?.(duration);
+
             setReady(true);
+
+            const pending = pendingRangeRef.current;
+            pendingRangeRef.current = null;
+            if (pending) validateAndPlay(pending.startSec, pending.endSec);
           },
           onApiChange: () => {
             try {
@@ -95,6 +132,7 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
 
     return () => {
       cancelled = true;
+      readyRef.current = false;
       setReady(false);
       playerRef.current?.destroy?.();
       playerRef.current = null;
@@ -109,7 +147,7 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
       const current = Number(p.getCurrentTime()) || 0;
       onTimeRef.current?.(current);
 
-      if (endRef.current !== null && current >= endRef.current - 0.05) {
+      if (endRef.current !== null && current >= endRef.current - 0.08) {
         p.pauseVideo?.();
         endRef.current = null;
         onRangeEndRef.current?.();
@@ -121,14 +159,17 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
 
   useImperativeHandle(ref, () => ({
     playRange(startSec, endSec) {
-      endRef.current = endSec;
-      playerRef.current?.seekTo?.(startSec, true);
-      playerRef.current?.playVideo?.();
+      if (!readyRef.current) {
+        pendingRangeRef.current = { startSec, endSec };
+        return;
+      }
+      validateAndPlay(startSec, endSec);
     },
     setRate(rate) {
       playerRef.current?.setPlaybackRate?.(rate);
     },
     pause() {
+      pendingRangeRef.current = null;
       endRef.current = null;
       playerRef.current?.pauseVideo?.();
     }
