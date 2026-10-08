@@ -52,8 +52,28 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
         videoId,
         width: "100%",
         height: "100%",
-        playerVars: { playsinline: 1, rel: 0 },
-        events: { onReady: () => setReady(true) }
+        playerVars: {
+          playsinline: 1,
+          rel: 0,
+          cc_load_policy: 1,
+          cc_lang_pref: "en",
+          hl: "en"
+        },
+        events: {
+          onReady: () => {
+            // Keep English captions inside the official YouTube player whenever
+            // the video exposes a caption track. AI captions become optional.
+            try {
+              playerRef.current?.setOption?.("captions", "track", { languageCode: "en" });
+            } catch {}
+            setReady(true);
+          },
+          onApiChange: () => {
+            try {
+              playerRef.current?.setOption?.("captions", "track", { languageCode: "en" });
+            } catch {}
+          }
+        }
       });
     };
 
