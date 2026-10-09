@@ -23,7 +23,12 @@ declare global {
   }
 }
 
-type PendingRange = { startSec: number; endSec: number } | null;
+type PendingRange = { startSec: number; endSec: number; loop: boolean } | null;
+
+// AI-selected cuts are normally much longer than a sentence. Keeping the
+// public PlayerHandle unchanged lets the existing page automatically loop
+// full cuts while sentence-level practice still ends normally.
+const MIN_LOOP_RANGE_SECONDS = 20;
 
 const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
   { videoId, onTime, onRangeEnd, onDuration, onInvalidRange },
@@ -32,7 +37,9 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
   const reactId = useId();
   const holderId = useRef(`yt-${reactId.replace(/:/g, "")}`);
   const playerRef = useRef<any>(null);
+  const startRef = useRef<number | null>(null);
   const endRef = useRef<number | null>(null);
+  const loopRef = useRef(false);
   const pendingRangeRef = useRef<PendingRange>(null);
   const readyRef = useRef(false);
   const onRangeEndRef = useRef(onRangeEnd);
@@ -40,6 +47,7 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
   const onDurationRef = useRef(onDuration);
   const onInvalidRangeRef = useRef(onInvalidRange);
   const [ready, setReady] = useState(false);
+  const [looping, setLooping] = useState(false);
 
   useEffect(() => {
     onRangeEndRef.current = onRangeEnd;
@@ -48,23 +56,34 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
     onInvalidRangeRef.current = onInvalidRange;
   }, [onRangeEnd, onTime, onDuration, onInvalidRange]);
 
-  function validateAndPlay(startSec: number, endSec: number) {
+  function stopPlayback() {
+    pendingRangeRef.current = null;
+    startRef.current = null;
+    endRef.current = null;
+    loopRef.current = false;
+    setLooping(false);
+    playerRef.current?.pauseVideo?.();
+  }
+
+  function validateAndPlay(startSec: number, endSec: number, loop: boolean) {
     const player = playerRef.current;
     if (!player?.seekTo) {
-      pendingRangeRef.current = { startSec, endSec };
+      pendingRangeRef.current = { startSec, endSec, loop };
       return;
     }
 
     const duration = Number(player.getDuration?.()) || 0;
     if (duration > 0 && (startSec < 0 || startSec >= duration - 0.25)) {
-      endRef.current = null;
-      player.pauseVideo?.();
+      stopPlayback();
       onInvalidRangeRef.current?.(startSec, endSec, duration);
       return;
     }
 
     const safeEnd = duration > 0 ? Math.min(endSec, duration) : endSec;
+    startRef.current = startSec;
     endRef.current = safeEnd;
+    loopRef.current = loop;
+    setLooping(loop);
     player.seekTo(startSec, true);
     player.playVideo?.();
   }
@@ -73,6 +92,10 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
     let cancelled = false;
     readyRef.current = false;
     pendingRangeRef.current = null;
+    startRef.current = null;
+    endRef.current = null;
+    loopRef.current = false;
+    setLooping(false);
 
     const createPlayer = () => {
       if (cancelled || !window.YT?.Player) return;
@@ -103,7 +126,7 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
 
             const pending = pendingRangeRef.current;
             pendingRangeRef.current = null;
-            if (pending) validateAndPlay(pending.startSec, pending.endSec);
+            if (pending) validateAndPlay(pending.startSec, pending.endSec, pending.loop);
           },
           onApiChange: () => {
             try {
@@ -134,6 +157,7 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
       cancelled = true;
       readyRef.current = false;
       setReady(false);
+      setLooping(false);
       playerRef.current?.destroy?.();
       playerRef.current = null;
     };
@@ -148,8 +172,18 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
       onTimeRef.current?.(current);
 
       if (endRef.current !== null && current >= endRef.current - 0.08) {
+        if (loopRef.current && startRef.current !== null) {
+          p.seekTo(startRef.current, true);
+          p.playVideo?.();
+          onTimeRef.current?.(startRef.current);
+          return;
+        }
+
         p.pauseVideo?.();
+        startRef.current = null;
         endRef.current = null;
+        loopRef.current = false;
+        setLooping(false);
         onRangeEndRef.current?.();
       }
     }, 250);
@@ -159,27 +193,38 @@ const YouTubePlayer = forwardRef<PlayerHandle, Props>(function YouTubePlayer(
 
   useImperativeHandle(ref, () => ({
     playRange(startSec, endSec) {
+      const loop = endSec - startSec >= MIN_LOOP_RANGE_SECONDS;
       if (!readyRef.current) {
-        pendingRangeRef.current = { startSec, endSec };
+        pendingRangeRef.current = { startSec, endSec, loop };
         return;
       }
-      validateAndPlay(startSec, endSec);
+      validateAndPlay(startSec, endSec, loop);
     },
     setRate(rate) {
       playerRef.current?.setPlaybackRate?.(rate);
     },
     pause() {
-      pendingRangeRef.current = null;
-      endRef.current = null;
-      playerRef.current?.pauseVideo?.();
+      stopPlayback();
     }
   }), []);
 
   return (
-    <div className="video-shell">
-      <div id={holderId.current} className="video-frame" />
-      {!ready && <div className="video-loading">Carregando player…</div>}
-    </div>
+    <>
+      <div className="video-shell">
+        <div id={holderId.current} className="video-frame" />
+        {!ready && <div className="video-loading">Carregando player…</div>}
+      </div>
+      {looping && (
+        <button
+          type="button"
+          className="secondary"
+          style={{ width: "100%", marginTop: 12 }}
+          onClick={stopPlayback}
+        >
+          ■ Parar loop
+        </button>
+      )}
+    </>
   );
 });
 
